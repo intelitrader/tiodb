@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://xamarin.com/schemas/2014/forms"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:d="http://xamarin.com/schemas/2014/forms/design"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             x:Class="IASL.Views.StockDetailPage"
+             Title="{Binding Title}">
+
+    <StackLayout Spacing="20" Padding="15">
+        <Label Text="Code:" FontSize="Medium" />
+        <Label Text="{Binding Stock.Code}" d:Text="Stock code" FontSize="Small"/>
+        <Label Text="Preço:" FontSize="Medium" />
+        <Label Text="{Binding Stock.Price}" d:Text="Stock value" FontSize="Small"/>
+        <Label Text="Abertura:" FontSize="Medium" />
+        <Label Text="{Binding Stock.OpeningPrice}" d:Text="Stock value" FontSize="Small"/>
+        <Label Text="Máximo:" FontSize="Medium" />
+        <Label Text="{Binding Stock.MaxPrice}" d:Text="Stock value" FontSize="Small"/>
+        <Label Text="Mínimo:" FontSize="Medium" />
+        <Label Text="{Binding Stock.MinPrice}" d:Text="Stock value" FontSize="Small"/>
+        <Label Text="Médio:" FontSize="Medium" />
+        <Label Text="{Binding Stock.AveragePrice}" d:Text="Stock value" FontSize="Small"/>
+    </StackLayout>
+    
+</ContentPage>
