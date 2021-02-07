@@ -16,12 +16,14 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 */
 
 #include "pch.h"
+#include "tio.h"
 #include "TioTcpServer.h"
 #include "Container.h"
 #include "MemoryStorage.h"
 //#include "BdbStorage.h"
 #include "LogDbStorage.h"
 #include "../../client/cpp/tioclient.hpp"
+#include "tiomutex.h"
 
 #if TIO_PYTHON_PLUGIN_SUPPORT
 #include "TioPython.h"
@@ -30,6 +32,7 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 using namespace tio;
 
 using std::shared_ptr;
+using std::make_shared;
 using boost::scoped_array;
 using std::cout;
 using std::endl;
@@ -37,19 +40,18 @@ using std::queue;
 
 void LoadStorageTypes(ContainerManager* containerManager, const string& dataPath)
 {
-	shared_ptr<ITioStorageManager> mem = 
-		shared_ptr<ITioStorageManager>(new tio::MemoryStorage::MemoryStorageManager());
+	auto mem = make_shared<tio::MemoryStorage::MemoryStorageManager>();
 	
-	shared_ptr<ITioStorageManager> ldb = 
-		shared_ptr<ITioStorageManager>(new tio::LogDbStorage::LogDbStorageManager(dataPath));
+	//shared_ptr<ITioStorageManager> ldb = 
+	//	shared_ptr<ITioStorageManager>(new tio::LogDbStorage::LogDbStorageManager(dataPath));
 
-	containerManager->RegisterFundamentalStorageManagers(mem, mem);
+	containerManager->RegisterFundamentalStorageManagers(mem, mem, mem);
 
 //	containerManager->RegisterStorageManager("bdb_map", bdb);
 //	containerManager->RegisterStorageManager("bdb_vector", bdb);
 
-	containerManager->RegisterStorageManager("persistent_list", ldb);
-	containerManager->RegisterStorageManager("persistent_map", ldb);
+	/*containerManager->RegisterStorageManager("persistent_list", ldb);
+	containerManager->RegisterStorageManager("persistent_map", ldb);*/
 }
 
 void SetupContainerManager(
@@ -66,27 +68,52 @@ void SetupContainerManager(
 	}
 }
 
-void RunServer(tio::ContainerManager* manager,
+void RunServer(tio::ContainerManager* containerManager,
 			   unsigned short port, 
 			   const vector< pair<string, string> >& users,
-			   const string& logFilePath)
+			   const string& logFilePath,
+			   unsigned threadCount,
+			   SERVER_OPTIONS options)
 {
 	namespace asio = boost::asio;
 	using namespace boost::asio::ip;
+	using std::thread;
+	using std::vector;
 
-#ifndef _WIN32
-	//ProfilerStart("/tmp/tio.prof");
-#endif
+	asio::io_context io_service;
+	string local_endpoint_path = string("/var/run/tio_") + std::to_string(port);
+#if BOOST_ASIO_HAS_LOCAL_SOCKETS
+	TioTcpServer::local_endpoint_t le(local_endpoint_path);
+#endif // BOOST_ASIO_HAS_LOCAL_SOCKETS
+	TioTcpServer::endpoint_t e(tcp::v4(), port);
 
-	asio::io_service io_service;
-	tcp::endpoint e(tcp::v4(), port);
+	auto remove_local_endpoint = [&]()
+	{
+		if (boost::filesystem::exists(local_endpoint_path))
+		{
+			if (!boost::filesystem::remove(local_endpoint_path))
+			{
+				cout << "Error emoving " << local_endpoint_path << endl;
+			}
+		}
+	};
+
+	auto handler = [&](const boost::system::error_code& error, int signal_number)
+	{
+		std::cout << "Exiting..." << signal_number << std::endl;
+		remove_local_endpoint();
+		exit(1);
+	};
+
+	remove_local_endpoint();
+
 
 	//
 	// default aliases
 	//
 	if(users.size())
 	{
-		shared_ptr<ITioContainer> usersContainer = manager->CreateContainer("volatile_map", "__users__");
+		shared_ptr<ITioContainer> usersContainer = containerManager->CreateContainer("volatile_map", "__users__");
 
 		pair<string, string> p;
 		BOOST_FOREACH(p, users)
@@ -95,17 +122,50 @@ void RunServer(tio::ContainerManager* manager,
 		}
 	}
 
-	tio::TioTcpServer tioServer(*manager, io_service, e, logFilePath);
+	asio::io_service::work work(io_service);
+
+	tio::TioTcpServer tioServer(*containerManager, 
+		io_service, 
+		e, 
+#if BOOST_ASIO_HAS_LOCAL_SOCKETS
+		le, 
+#endif // BOOST_ASIO_HAS_LOCAL_SOCKETS
+		logFilePath);
 
 	tioServer.Start();
 
-	cout << "Up and running!" << endl;
+	vector<thread> threads;
 
-	io_service.run();
+	for (unsigned a = 0; a < threadCount; a++)
+	{
+		threads.emplace_back(
+			[&]()
+			{
+				if (options.ioServiceMethod == IoServiceMethod::poll)
+				{
+					for (;;)
+					{
+						io_service.poll();
+						std::this_thread::sleep_for(std::chrono::microseconds(options.ioServicePollSleepTime));
+					}
+				}
+				else
+				{
+					io_service.run();
+				}
+			});
+	}
 
-#ifndef _WIN32
-	//ProfilerStop();
-#endif
+	boost::asio::signal_set signals(io_service, SIGINT);
+	signals.async_wait(handler);
+
+	cout << "Up and running, " << threadCount << " threads" << endl;
+
+	for (auto& t : threads)
+	{
+		if (t.joinable())
+			t.join();
+	}
 }
 
 class cpp2c
@@ -127,6 +187,8 @@ public:
 		case TioData::Double:
 			tiodata_set_double(&c_, v.AsDouble());
 			break;
+		default:
+			return;
 		}
 	}
 
@@ -162,6 +224,8 @@ public:
 		case TIO_DATA_TYPE_STRING:
 			cpp_.Set(c->string_, c->string_size_);
 			break;
+		default:
+			return;
 		}
 	}
 
@@ -180,6 +244,8 @@ public:
 			case TioData::Double:
 				tiodata_set_double(c_, cpp_.AsDouble());
 				break;
+			default:
+				return;
 			}
 		}
 	}
@@ -517,19 +583,17 @@ protected:
 		if(start)
 			startString = start->string_;
 
-		unsigned int cppHandle;
-
 		try
 		{
 			// adding "this" due to a bug in gcc...
-			cppHandle = container->Subscribe(
+			/*cppHandle = container->Subscribe(
 				[this, cookie, event_callback](const string& eventName, const TioData& key, const TioData& value, const TioData& metadata)
 				{
 					LocalContainerManager::SubscribeBridge(cookie, event_callback, eventName, key, value, metadata);
 				},
 				startString);
 
-			subscriptionHandles_[handle] = cppHandle;
+			subscriptionHandles_[handle] = cppHandle;*/
 		}
 		catch(std::exception&)
 		{
@@ -545,7 +609,7 @@ protected:
 
 		try
 		{
-			container->Unsubscribe(subscriptionHandles_[handle]);
+			//container->Unsubscribe(subscriptionHandles_[handle]);
 		}
 		catch(std::exception&)
 		{
@@ -561,11 +625,11 @@ protected:
 
 		try
 		{
-			container->WaitAndPopNext(
+			/*container->WaitAndPopNext(
 				[this, cookie, event_callback](const string& eventName, const TioData& key, const TioData& value, const TioData& metadata)
 				{
 					LocalContainerManager::SubscribeBridge(cookie, event_callback, eventName, key, value, metadata);
-				});
+				});*/
 		}
 		catch(std::exception&)
 		{
@@ -661,7 +725,7 @@ void LoadPlugins(const std::vector<std::string>& plugins, const map<string, stri
 int main(int argc, char* argv[])
 {
 	namespace po = boost::program_options;
-
+    
 	cout << "Tio, The Information Overlord. Copyright Rodrigo Strauss (www.1bit.com.br)" << endl;
 
 	try
@@ -679,7 +743,9 @@ int main(int argc, char* argv[])
 			("port", po::value<unsigned short>(), "listening port. If not informed, 2605")
 			("threads", po::value<unsigned short>(), "number of running threads")
 			("log-path", po::value<string>(), "transaction log file path. It must be a full file path, not just the directory. Ex: c:\\data\\tio.log")
-			("data-path", po::value<string>(), "sets data path");
+			("data-path", po::value<string>(), "sets data path")
+			("io_service-poll", "sets poll method to run the io_context object's event processing loop. Default method is run")
+			("poll-sleep-time", po::value<unsigned short>(), "time (in microseconds) to sleep after io_service poll executes ready handlers. Default sleep time is 10000");
 
 		po::variables_map vm;
 		po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -719,6 +785,19 @@ int main(int argc, char* argv[])
 
 				users.push_back(make_pair(user.substr(0, sep), user.substr(sep+1)));
 			}
+		}
+
+		unsigned short threadCount = 32;
+
+		if (vm.count("threads"))
+		{
+			threadCount = vm["threads"].as<unsigned short>();
+		}
+
+		if(threadCount == 1)
+		{
+			cout << "Running as singlethread, disabling all mutexes" << endl;
+			tio_recursive_mutex::set_single_threaded();
 		}
 
 		{
@@ -778,7 +857,12 @@ int main(int argc, char* argv[])
 			if(vm.count("port"))
 				port = vm["port"].as<unsigned short>();
 
-			cout << "Listening on port " << port << endl;
+			cout << "Listening on port " 
+				<< port 
+#if BOOST_ASIO_HAS_LOCAL_SOCKETS
+				<< " (and locally on /var/run/tio_" << port << ")"
+#endif // BOOST_ASIO_HAS_LOCAL_SOCKETS
+				<< endl;
 
 			string logFilePath;
 
@@ -788,12 +872,31 @@ int main(int argc, char* argv[])
 
 				cout << "Saving transaction log to " << logFilePath << endl;
 			}
+
+			SERVER_OPTIONS options;
+			options.ioServiceMethod = IoServiceMethod::run;
+
+			if (vm.count("io_service-poll"))
+			{
+				options.ioServiceMethod = IoServiceMethod::poll;
+				
+				options.ioServicePollSleepTime = 10000;
+
+				if (vm.count("poll-sleep-time"))
+				{
+					options.ioServicePollSleepTime = vm["poll-sleep-time"].as<unsigned short>();
+				}
+
+				cout << "Using io_service::poll method (sleep for " << options.ioServicePollSleepTime << " microseconds)" <<  endl;
+			}
 		
 			RunServer(
 				&containerManager,
 				port,
 				users,
-				logFilePath);
+				logFilePath,
+				threadCount, 
+				options);
 		}
 	}
 	catch(std::exception& ex)

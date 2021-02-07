@@ -16,12 +16,14 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 */
 #pragma once
 
+#include <thread>
+#include <mutex>
 
 namespace tio {
 	namespace MemoryStorage
 {
-
 	using std::make_tuple;
+	using tio::tio_recursive_mutex;
 
 	class VectorStorage : 
 		boost::noncopyable,
@@ -33,7 +35,28 @@ namespace tio {
 		typedef vector<ValueAndMetadata> DataContainerT;
 		DataContainerT data_;
 		string name_, type_;
-		EventDispatcher dispatcher_;
+		EventSink sink_;
+
+		uint64_t revNum_;
+
+		typedef std::lock_guard<std::mutex> lock_guard_t;
+		std::mutex mutex_;
+
+		void Publish(ContainerEventCode eventCode, const TioData& k, const TioData& v, const TioData& m)
+		{
+			decltype(sink_) sink;
+			
+			{
+				lock_guard_t lock(mutex_);
+
+				if (!sink_)
+					return;
+
+				sink = sink_;				
+			}
+
+			sink(GetId(), eventCode, k, v, m);
+		}
 
 		inline ValueAndMetadata& GetInternalRecord(const TioData& key)
 		{
@@ -73,9 +96,10 @@ namespace tio {
 
 	public:
 
-		VectorStorage(const string& name, const string& type) :
-			name_(name),
-			type_(type)
+		VectorStorage(const string& name, const string& type) 
+			: name_(name)
+			, type_(type)
+			, revNum_(0)
 		  {}
 
 		  ~VectorStorage()
@@ -83,8 +107,20 @@ namespace tio {
 			  return;
 		  }
 
+		  virtual uint64_t GetRevNum()
+		  {
+			  lock_guard_t lock(mutex_);
+			  return revNum_;
+		  }
+
+		  virtual uint64_t GetId()
+		  {
+			  return reinterpret_cast<uint64_t>(this);
+		  }
+
 		  virtual string GetName()
 		  {
+			  lock_guard_t lock(mutex_);
 			  return name_;
 		  }
 
@@ -100,24 +136,32 @@ namespace tio {
 
 		  virtual size_t GetRecordCount()
 		  {
+			  lock_guard_t lock(mutex_);
 			  return data_.size();
 		  }
 
 		  virtual void PushBack(const TioData& key, const TioData& value, const TioData& metadata)
 		  {
-			  CheckValue(value);
+				CheckValue(value);
 
-			  data_.push_back(ValueAndMetadata(value, metadata));
+				{
+					lock_guard_t lock(mutex_);
+					data_.push_back(ValueAndMetadata(value, metadata));
+				}
 
-			  dispatcher_.RaiseEvent("push_back", static_cast<int>(data_.size() - 1), value, metadata);
+				Publish(EVENT_CODE_INSERT, static_cast<int>(data_.size() - 1), value, metadata);
 		  }
 
 		  virtual void PushFront(const TioData& key, const TioData& value, const TioData& metadata)
 		  {
 			  CheckValue(value);
-			  data_.insert(data_.begin(), ValueAndMetadata(value, metadata));
 
-			  dispatcher_.RaiseEvent("push_front", key, value, metadata);
+			  {
+				lock_guard_t lock(mutex_);
+			  	data_.insert(data_.begin(), ValueAndMetadata(value, metadata));
+			  }
+
+			  Publish(EVENT_CODE_INSERT, 0, value, metadata);
 		  }
 
 	private:
@@ -143,9 +187,12 @@ namespace tio {
 			if(key)
 				*key = static_cast<int>(data_.size() - 1);
 
-			_Pop(data_.end() - 1, value, metadata);
+			{
+				lock_guard_t lock(mutex_);
+				_Pop(data_.end() - 1, value, metadata);
+			}
 
-			dispatcher_.RaiseEvent("pop_back", 
+			Publish(EVENT_CODE_DELETE,
 				key ? *key : TIONULL, 
 				value ? *value : TIONULL,
 				metadata ? *metadata : TIONULL);
@@ -156,10 +203,13 @@ namespace tio {
 			if(data_.empty())
 				throw std::invalid_argument("empty");
 
-			_Pop(data_.begin(), value, metadata);
+			{
+				lock_guard_t lock(mutex_);
+				_Pop(data_.begin(), value, metadata);
+			}
 
-			dispatcher_.RaiseEvent("pop_front", 
-				key ? *key : TIONULL, 
+			Publish(EVENT_CODE_DELETE,
+				0, 
 				value ? *value : TIONULL,
 				metadata ? *metadata : TIONULL);
 		}
@@ -175,44 +225,56 @@ namespace tio {
 		{
 			CheckValue(value);
 
-			ValueAndMetadata& data = GetInternalRecord(key);
+			{
+				lock_guard_t lock(mutex_);
+				ValueAndMetadata& data = GetInternalRecord(key);
+				data = ValueAndMetadata(value, metadata);
+			}
 
-			data = ValueAndMetadata(value, metadata);
-
-			dispatcher_.RaiseEvent("set", key, value, metadata);
+			Publish(EVENT_CODE_SET, key, value, metadata);
 		}
 
 		virtual void Insert(const TioData& key, const TioData& value, const TioData& metadata)
 		{
 			CheckValue(value);
 
-			size_t recordNumber = GetRecordNumber(key);
+			{
+				lock_guard_t lock(mutex_);
+				size_t recordNumber = GetRecordNumber(key);
 
-			// check out of bounds
-			GetRecord(key, NULL, NULL, NULL);
+				// check out of bounds
+				GetRecord(key, NULL, NULL, NULL);
 
-			data_.insert(data_.begin() + recordNumber, ValueAndMetadata(value, metadata));
+				data_.insert(data_.begin() + recordNumber, ValueAndMetadata(value, metadata));
+			}
 
-			dispatcher_.RaiseEvent("insert", key, value, metadata);
+			Publish(EVENT_CODE_INSERT, key, value, metadata);
 		}
 
 		virtual void Delete(const TioData& key, const TioData& value, const TioData& metadata)
 		{
 			size_t recordNumber = GetRecordNumber(key);
 
-			// check out of bounds
-			GetRecord(key, NULL, NULL, NULL);
+			{
+				lock_guard_t lock(mutex_);
 
-			data_.erase(data_.begin() + recordNumber);
+				// check out of bounds
+				GetRecord(key, NULL, NULL, NULL);
 
-			dispatcher_.RaiseEvent("delete", key, value, metadata);
+				data_.erase(data_.begin() + recordNumber);
+			}
+
+			Publish(EVENT_CODE_DELETE, key, value, metadata);
 		}
 
 		virtual void Clear()
 		{
-			data_.clear();
+			{
+				lock_guard_t lock(mutex_);
+				data_.clear();
+			}
 
-			dispatcher_.RaiseEvent("clear", TIONULL, TIONULL, TIONULL);
+			Publish(EVENT_CODE_CLEAR, TIONULL, TIONULL, TIONULL);
 		}
 
 		virtual shared_ptr<ITioResultSet> Query(int startOffset, int endOffset, const TioData& query)
@@ -226,32 +288,36 @@ namespace tio {
 			// if client is asking for a negative index that's bigger than the container,
 			// will start from beginning. Ex: if container size is 3 and start = -5, will start from 0
 			//
-			if(GetRecordCount() == 0)
 			{
-				begin = end = data_.end();
-				startOffset = 0;
+				lock_guard_t lock(mutex_);
+				if(GetRecordCount() == 0)
+				{
+					begin = end = data_.end();
+					startOffset = 0;
+				}
+				else
+				{
+					int recordCount = GetRecordCount();
+
+					NormalizeQueryLimits(&startOffset, &endOffset, recordCount);
+
+				}
+
+				VectorResultSet::ContainerT resultSetItems;
+
+				resultSetItems.reserve(endOffset - startOffset);
+
+				for(int key = startOffset; key != endOffset ; ++key)
+					resultSetItems.push_back(make_tuple(TioData(key), data_[key].value, data_[key].metadata));
+
+				return shared_ptr<ITioResultSet>(
+					new VectorResultSet(std::move(resultSetItems), TIONULL));
 			}
-			else
-			{
-				int recordCount = GetRecordCount();
-
-				NormalizeQueryLimits(&startOffset, &endOffset, recordCount);
-
-			}
-
-			VectorResultSet::ContainerT resultSetItems;
-
-			resultSetItems.reserve(endOffset - startOffset);
-
-			for(int key = startOffset; key != endOffset ; ++key)
-				resultSetItems.push_back(make_tuple(TioData(key), data_[key].value, data_[key].metadata));
-
-			return shared_ptr<ITioResultSet>(
-				new VectorResultSet(std::move(resultSetItems), TIONULL));
 		}
 
 		virtual void GetRecord(const TioData& searchKey, TioData* key, TioData* value, TioData* metadata)
-		{
+		{	
+			lock_guard_t lock(mutex_);
 			const ValueAndMetadata& data = GetInternalRecord(searchKey);
 
 			if(key)
@@ -264,6 +330,19 @@ namespace tio {
 				*metadata = data.metadata;
 		}
 
+		virtual void SetSubscriber(EventSink sink)
+		{
+			lock_guard_t lock(mutex_);
+			sink_ = sink;
+		}
+
+		virtual void RemoveSubscriber()
+		{
+			lock_guard_t lock(mutex_);
+			sink_ = nullptr;
+		}
+
+/*
 		virtual unsigned int Subscribe(EventSink sink, const string& start)
 		{
 			unsigned int cookie = 0;
@@ -309,5 +388,6 @@ namespace tio {
 		{
 			dispatcher_.Unsubscribe(cookie);
 		}
+		*/
 	};
 }}

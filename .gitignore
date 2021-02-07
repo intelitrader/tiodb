@@ -170,3 +170,7 @@ intelihubclient.sln
 intelihubclient.vcxproj
 intelihubclient.vcxproj.filters
 
+
+# Clangd
+.clangd/
+compile_commands.json

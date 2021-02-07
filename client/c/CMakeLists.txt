@@ -1,10 +1,26 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required (VERSION 3.0)
+project(tioclient C)
 
-PROJECT(intelihubclient)
+set(CMAKE_CXX_STANDARD 11)
 
-SET (TIO_BUILD_DIR ../../../bin)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY
+    ../../bin
+)
 
-SET(LIBRARY_OUTPUT_PATH ${TIO_BUILD_DIR} CACHE PATH "Build directory" FORCE)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY
+	../../bin
+)
 
-ADD_LIBRARY(intelihubclient tioclient.c)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
+	../../bin
+)
+
+#add_compile_definitions(WIN32 _WINDOWS _USRDLL tioclientdll_EXPORTS)
+
+add_library(tioclient STATIC 
+	tioclient.c
+	tioclient.h
+	tioclient_internals.h
+	tioclientdll.def 
+)
 

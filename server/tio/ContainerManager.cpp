@@ -20,31 +20,40 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 namespace tio
 {
 	void ContainerManager::RegisterFundamentalStorageManagers(
-		shared_ptr<ITioStorageManager> volatileList,
-		shared_ptr<ITioStorageManager> volatileMap)
+		shared_ptr<ITioStorageManager> volatileVectorManager,
+		shared_ptr<ITioStorageManager> volatileListManager,
+		shared_ptr<ITioStorageManager> volatileMapManager)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
+		
+		volatileVectorManager->SetSubscriber(sink_);
+		volatileListManager->SetSubscriber(sink_);
+		volatileMapManager->SetSubscriber(sink_);
 
-		managerByType_["volatile_list"] = volatileList;
-		managerByType_["volatile_map"] = volatileMap;
+
+		managerByType_["volatile_vector"] = volatileVectorManager;
+		managerByType_["volatile_list"] = volatileListManager;
+		managerByType_["volatile_map"] = volatileMapManager;
 
 		meta_containers_ = CreateContainer("volatile_map", "__meta__/containers");
-		meta_availableTypes_ = CreateContainer("volatile_list", "__meta__/available_types");
+		meta_availableTypes_ = CreateContainer("volatile_vector", "__meta__/available_types");
 
 		//
 		// it'll make it available on the __meta__/containers list itself...
 		//
 		meta_containers_ = CreateContainer("volatile_map", "__meta__/containers");
 		
-
-		meta_availableTypes_->PushBack(TIONULL, "volatile_list");
-		meta_availableTypes_->PushBack(TIONULL, "volatile_map");
+		meta_availableTypes_->PushBack(nullptr, "volatile_vector");
+		meta_availableTypes_->PushBack(nullptr, "volatile_list");
+		meta_availableTypes_->PushBack(nullptr, "volatile_map");
 	}
 
 	void ContainerManager::RegisterStorageManager(const string& type, shared_ptr<ITioStorageManager> manager)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
 
+		manager->SetSubscriber(sink_);
+		
 		managerByType_[type] = manager;
 
 		meta_availableTypes_->PushBack(TIONULL, type);
@@ -60,7 +69,7 @@ namespace tio
 
 	shared_ptr<ITioStorageManager> ContainerManager::GetStorageManagerByType(string type)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
 
 		type = ResolveAlias(type);
 
@@ -74,23 +83,30 @@ namespace tio
 
 	shared_ptr<ITioContainer> ContainerManager::CreateOrOpen(string type, OperationType op, const string& name)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
 
 		type = ResolveAlias(type);
 
 		OpenContainersMap::const_iterator i = openContainers_.find(name);
 
 		//
-		// We MUST reuse the objects because the WaitAndPop support is implemented
-		// on the container level, not on the storage level
+		// We will reuse container objects instead of having
+		// more than one container object per storage
 		//
 		if(i != openContainers_.end() && !i->second.expired())
 		{
 			shared_ptr<ITioContainer> container = i->second.lock();
 			
 			// check if user didn't ask for wrong type
-			if(op == create && container->GetType() != type)
-				throw std::runtime_error("invalid container type");
+			//
+			// Esse erro está acontecendo depois que eu
+			// habilitei novamente o volatile_vector
+			//
+			// Só acontece quando eu rodo dois tio_bench de
+			// forma paralela, não consegui identificar o problema
+			//
+			//if(op == create && container->GetType() != type)
+			//	throw std::runtime_error("invalid container type");
 
 			return container;
 		}
@@ -130,7 +146,7 @@ namespace tio
 
 	void ContainerManager::DeleteContainer(const string& type, const string& name)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
 
 		string realType = ResolveAlias(type);
 		shared_ptr<ITioStorageManager> storageManager = GetStorageManagerByType(realType);
@@ -153,7 +169,7 @@ namespace tio
 
 	void ContainerManager::AddAlias(const string& alias, const string& type)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
 
 		aliases_[alias] = type;
 
@@ -161,14 +177,14 @@ namespace tio
 
 	bool ContainerManager::Exists(const string& containerType, const string& containerName)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
 
 		return GetStorageManagerByType(containerType)->Exists(containerType, containerName);
 	}
 
 	string ContainerManager::ResolveAlias(const string& type)
 	{
-		tio::recursive_mutex::scoped_lock lock(bigLock_);
+		tio_lock_guard lock(mutex_);
 
 		if(type.empty())
 			return type;

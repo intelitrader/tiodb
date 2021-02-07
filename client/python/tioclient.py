@@ -1,12 +1,25 @@
-# we'll not use this because it works only on 2.6+
-#from __future__ import print_function
+#!/usr/bin/python
 from decimal import Decimal
 import socket
 import functools
-from cStringIO import StringIO
 from datetime import datetime
 from decimal import Decimal
 import weakref
+import sys
+if sys.version_info.major == 3:
+    from io import StringIO
+    # Python 3 no longer has a 'long' type
+    long = int
+    # Python 3 renamed the 'unicode' type to 'str'
+    unicode = str
+    # Python 3 removed the original range function and renamed 'xrange' to 'range'
+    xrange = range
+    # To get the Python 2 behavior for range in Python 3, you could always convert the range object to a list:
+    # def range(size):
+    #     list(xrange(size))
+else:
+    from cStringIO import StringIO
+
 
 TIO_DEFAULT_PORT = 2605
 
@@ -86,7 +99,7 @@ def encode(values):
 #
 class ContainerPythonizer(object):
     def __del__(self):
-        self.Close()
+        self.close()
 
     def __getitem__(self, key):
         if isinstance(key, slice):
@@ -267,12 +280,22 @@ class TioServerConnection(object):
         return self.SendCommand('group_subscribe', group_name, start)
 
         
-    def __ReceiveLine(self):
+    def __ReceiveLine(self, timeout=None):
         i = self.receiveBuffer.find('\r\n')
         while i == -1:
-            self.receiveBuffer += self.s.recv(4096)
-            if not self.receiveBuffer:
-                raise Exception('error reading from connection socket')
+            if timeout is not None:
+                self.s.settimeout(timeout)
+            
+            try:
+                self.receiveBuffer += self.s.recv(4096).decode()
+                if not self.receiveBuffer:
+                    raise Exception('error reading from connection socket')
+            except socket.timeout:
+                return None
+            finally:
+                # this call will put the socket in blocking mode again
+                if timeout is not None:
+                    self.s.settimeout(None)
 
             i = self.receiveBuffer.find('\r\n')
 
@@ -334,7 +357,7 @@ class TioServerConnection(object):
 
     def RunLoop(self, timeout, max_events=1000000):
         self.s.settimeout(timeout)
-        for x in xrange(max_events):
+        for _ in xrange(max_events):
             try:
                 self.DispatchPendingEvents()
                 if self.stop:
@@ -345,7 +368,7 @@ class TioServerConnection(object):
 
     def __ReceiveData(self, size):
         while len(self.receiveBuffer) < size:
-            self.receiveBuffer += self.s.recv(4096)
+            self.receiveBuffer += self.s.recv(4096).decode()
 
         ret = self.receiveBuffer[:size]
         self.receiveBuffer = self.receiveBuffer[size:]
@@ -363,8 +386,11 @@ class TioServerConnection(object):
         del self.running_queries[query_id]
         return query
 
-    def ping(self):
-        return self.SendCommand('ping')
+    def ping(self, timeout=None):
+        if timeout is None:
+            return self.SendCommand('ping')
+        else:
+             return self.SendCommandWithTimeout('ping', timeout)
 
     def server_pause(self):
         return self.SendCommand('pause')
@@ -372,9 +398,13 @@ class TioServerConnection(object):
     def server_resume(self):
         return self.SendCommand('resume')
 
-    def ReceiveAnswer(self, wait_until_answer = True):
+    def ReceiveAnswer(self, wait_until_answer=True, timeout=None):
         while 1:
-            line = self.__ReceiveLine()
+            line = self.__ReceiveLine(timeout)
+
+            if not line and timeout is not None:
+                return None
+
             params = line.split(' ')
             currentParam = 0
 
@@ -502,14 +532,14 @@ class TioServerConnection(object):
         if data is None:
             return None
 
-        if type(data) is str:
+        if isinstance(data, (str)):
             return (data, 'string')
-        elif type(data) is int or type(data) is long:
+        elif isinstance(data, (int, long)):
             return (str(data), 'int')
-        elif type(data) in (Decimal, float):
+        elif isinstance(data, (Decimal, float)):
             return (str(data), 'double')
 
-        raise Exception('not supported data type')
+        raise Exception('not supported data type', data, type(data))
 
     def Auth(self, token, password):
         self.SendCommand(' '.join( ('auth', token, 'clean', password) ))
@@ -562,9 +592,35 @@ class TioServerConnection(object):
             return ''
 
     def ReceivePendingAnswers(self):
-        for x in xrange(self.pending_answers_count):
+        for _ in xrange(self.pending_answers_count):
             self.pending_answers_count -= 1
             self.ReceiveAnswer()
+
+    #
+    # I can't just add a timeout parameter to the SendCommand
+    # method because it would mess with the *args part
+    #
+    def SendCommandWithTimeout(self, command, timeout, *args):
+        if not self.wait_for_answers:
+            raise Exception("You can't use a timeout when the wait_for_answer=False (async mode)")
+
+        buffer = command
+        if len(args):
+            buffer += ' '
+            buffer += ' '.join([str(x) for x in args])
+
+        if buffer[-2:] != '\r\n':
+            buffer += '\r\n'
+
+        self.s.sendall(buffer.encode())
+
+        if self.log_sends:
+            print(buffer)
+
+        try:
+            return self.ReceiveAnswer(wait_until_answer=True, timeout=timeout)
+        except Exception as ex:
+            raise Exception('%s - "%s"' % (ex, buffer.strip('\r\n ')))
 
     def SendCommand(self, command, *args):
         buffer = command
@@ -575,10 +631,10 @@ class TioServerConnection(object):
         if buffer[-2:] != '\r\n':
             buffer += '\r\n'
 
-        self.s.sendall(buffer)
+        self.s.sendall(buffer.encode())
 
         if self.log_sends:
-            print buffer
+            print(buffer)
 
         if not self.wait_for_answers:
             self.pending_answers_count += 1
@@ -586,7 +642,7 @@ class TioServerConnection(object):
 
         try:
             return self.ReceiveAnswer()
-        except Exception, ex:
+        except Exception as ex:
             raise Exception('%s - "%s"' % (ex, buffer.strip('\r\n ')))
 
     def SendCommandAndForceAnswer(self, command, *args):
@@ -622,7 +678,7 @@ class TioServerConnection(object):
             buffer += metadata[0] + '\r\n'
 
         if self.log_sends:
-            print buffer
+            print(buffer)
 
         return self.SendCommand(buffer)
 
@@ -644,7 +700,10 @@ class TioServerConnection(object):
         return container
 
     def CloseContainer(self, handle):
-        self.SendCommand('close', handle)
+        try:
+            self.SendCommand('close', handle)
+        except:
+            pass
 
     def Query(self, handle, startOffset=None, endOffset=None):
         l = []
@@ -714,8 +773,8 @@ def parse_url(url):
 
         # data container name is optional
         return (host, port, parts[1]) if len(parts) == 2 else (host, port, None)
-    except Exception, ex:
-        print ex
+    except Exception as ex:
+        print(ex)
         raise Exception ('Not supported. Format must be "tio://host:port/[container_name]"')
 
 def open_by_url(url, create_container_type=None):
@@ -737,10 +796,19 @@ def connect(url):
 
     return TioServerConnection(address, port)
 
+def test_async_ping():
+    tio = connect('tio://127.0.0.1')
+    ret = tio.ping(5)
+    if ret is None:
+        print("Tio did not answer")
+    else:
+        print("OK")
+
 
 def main():
+    test_async_ping()
     tio = connect('tio://127.0.0.1')
-    def sink(c, e, k, v, m): print c, e, k, v, m
+    def sink(c, e, k, v, m): print(c, e, k, v, m)
     l = tio.create('xpto', 'volatile_list')
     l.subscribe(sink)
 

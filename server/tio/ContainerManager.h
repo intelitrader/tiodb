@@ -16,6 +16,7 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 */
 #pragma once
 
+#include "pch.h"
 #include "Container.h"
 
 namespace tio
@@ -23,15 +24,19 @@ namespace tio
 	using std::shared_ptr;
 	using std::weak_ptr;
 
+	using std::lock_guard;
+
 	class ContainerManager
 	{
 		typedef std::map<string, shared_ptr<ITioStorageManager> > ManagerByType;
 		typedef map< string, string > AliasesMap;
 		typedef map< string, weak_ptr<ITioContainer> > OpenContainersMap;
 
-		tio::recursive_mutex bigLock_;
+		tio_recursive_mutex mutex_;
+
 		ManagerByType managerByType_;
 		AliasesMap aliases_;
+		EventSink sink_;
 
 		OpenContainersMap openContainers_;
 
@@ -50,7 +55,11 @@ namespace tio
 
 		void AddAlias(const string& alias, const string& type);
 		
-		void RegisterFundamentalStorageManagers( shared_ptr<ITioStorageManager> volatileList, shared_ptr<ITioStorageManager> volatileMap);
+		void RegisterFundamentalStorageManagers(
+			shared_ptr<ITioStorageManager> volatileVectorManager,
+			shared_ptr<ITioStorageManager> volatileListManager, 
+			shared_ptr<ITioStorageManager> volatileMapManager);
+			
 		void RegisterStorageManager(const string& type, shared_ptr<ITioStorageManager> manager);
 	
 		shared_ptr<ITioContainer> CreateContainer(const string& type, const string& name);
@@ -61,5 +70,21 @@ namespace tio
 		bool Exists(const string& containerType, const string& containerName);
 
 		string ResolveAlias(const string& type);
+
+		void SetSubscriber(EventSink sink)
+		{
+			sink_ = sink;
+
+			for (auto& manager : managerByType_)
+				manager.second->SetSubscriber(sink_);
+		}
+
+		virtual void RemoveSubscriber()
+		{
+			sink_ = nullptr;
+			
+			for (auto& manager : managerByType_)
+				manager.second->SetSubscriber(nullptr);
+		}
 	};
 }

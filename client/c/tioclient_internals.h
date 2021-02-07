@@ -11,6 +11,8 @@ extern "C" {
 #define MESSAGE_FIELD_TYPE_INT	 		0x3
 #define MESSAGE_FIELD_TYPE_DOUBLE		0x4
 
+#define MESSAGE_FIELD_TYPE_MAX_VALUE MESSAGE_FIELD_TYPE_DOUBLE
+
 #define MESSAGE_FIELD_ID_COMMAND 		0x1
 #define MESSAGE_FIELD_ID_HANDLE 		0x2
 #define MESSAGE_FIELD_ID_KEY	 		0x3
@@ -20,7 +22,7 @@ extern "C" {
 #define MESSAGE_FIELD_ID_TYPE			0x7
 #define MESSAGE_FIELD_ID_ERROR_CODE		0x8
 #define MESSAGE_FIELD_ID_ERROR_DESC		0x9
-#define MESSAGE_FIELD_ID_EVENT			0xA
+#define MESSAGE_FIELD_ID_EVENT_CODE		0xA
 #define MESSAGE_FIELD_ID_START_RECORD	0xB
 #define MESSAGE_FIELD_ID_END			0xC
 #define MESSAGE_FIELD_ID_QUERY_ID		0xD
@@ -31,18 +33,32 @@ extern "C" {
 
 #define MESSAGE_FIELD_ID_QUERY_EXPRESSION 0x11
 
+#define MESSAGE_FIELD_ID_MAX_VALUE MESSAGE_FIELD_ID_QUERY_EXPRESSION
+
 #define TIO_COMMAND_ANSWER				0x1
 #define TIO_COMMAND_EVENT				0x2
 #define TIO_COMMAND_QUERY_ITEM			0x3
 
 #define TIO_COMMAND_NEW_GROUP_CONTAINER	0x4
 
+#define TIO_COMMAND_MAX_VALUE TIO_COMMAND_NEW_GROUP_CONTAINER
+
+#ifdef __linux__
+typedef int SOCKET;
+#endif
+
 
 struct PR1_MESSAGE_HEADER
 {
 	unsigned int message_size;
 	unsigned short field_count;
-	unsigned short reserved;
+
+	//
+	// Essa campo era um unsigned short "reserved"
+	// É por isso que temos um seqnum short, para
+	// não quebrar a compatibilidade do protocolo
+	//
+	unsigned short debug_session_seq_nun;
 };
 
 struct PR1_MESSAGE_FIELD_HEADER
@@ -74,13 +90,13 @@ struct TIO_CONTAINER
 	int handle;
 	
 	event_callback_t event_callback;
-	event_callback_t wait_and_pop_next_callback;
+        event_callback_t wait_and_pop_next_callback;
 	void* subscription_cookie;
 
 	const char* group_name;
 	const char* name;
 
-	void* wait_and_pop_next_cookie;
+        void* wait_and_pop_next_cookie;
 	struct TIO_CONNECTION* connection;
 };
 
@@ -101,7 +117,8 @@ struct TIO_CONNECTION
 	unsigned total_messages_received;
 
 	struct TIO_CONTAINER** containers;
-	int containers_count;
+	int containers_buffer_size;
+	int open_containers_count;
 
 	event_callback_t group_event_callback;
 	void* group_event_cookie;
@@ -114,6 +131,13 @@ struct TIO_CONNECTION
 	int pending_answer_count;
 
 	int debug_flags;
+
+	struct TIO_CONTAINER* clusters_container;
+	struct TIO_CONNECTION** clusters_connections;
+	int clusters_connections_buffer_size;
+	int clusters_connections_count;
+
+	int last_error;
 };
 
 struct X1_FIELD
@@ -122,6 +146,8 @@ struct X1_FIELD
 	char* value;
 };
 
+
+    unsigned strlen32(const char* str);
 
 char* to_lower(char* p);
 
@@ -151,14 +177,14 @@ double pr1_message_field_get_double(const struct PR1_MESSAGE_FIELD_HEADER* field
 void   pr1_message_field_get_string(const struct PR1_MESSAGE_FIELD_HEADER* field, char* buffer, unsigned int buffer_size);
 
 
-void pr1_message_get_buffer(struct PR1_MESSAGE* pr1_message, void** buffer, unsigned int* size);
+void pr1_message_get_buffer(struct PR1_MESSAGE* pr1_message, void** buffer, unsigned int* size, unsigned short debug_seq_num);
 
 void pr1_message_parse(struct PR1_MESSAGE* pr1_message);
 
 struct PR1_MESSAGE_FIELD_HEADER* pr1_message_field_find_by_id(const struct PR1_MESSAGE* pr1_message, unsigned int field_id);
 
-int pr1_message_send(SOCKET socket, struct PR1_MESSAGE* pr1_message);
-int pr1_message_send_and_delete(SOCKET socket, struct PR1_MESSAGE* pr1_message);
+int pr1_message_send(SOCKET socket, struct PR1_MESSAGE* pr1_message, unsigned short debug_seq_num);
+int pr1_message_send_and_delete(SOCKET socket, struct PR1_MESSAGE* pr1_message, unsigned short debug_seq_num);
 
 struct PR1_MESSAGE* pr1_message_new_get_buffer_for_receive(struct PR1_MESSAGE_HEADER* message_header, void** buffer);
 
@@ -174,7 +200,7 @@ int pr1_message_get_error_code(struct PR1_MESSAGE* msg);
 void pr1_message_field_to_tio_data(const struct PR1_MESSAGE_FIELD_HEADER* field, struct TIO_DATA* tiodata);
 const char* message_field_id_to_string(int i);
 const char* tio_command_to_string(int i);
-void pr1_message_fill_header_info(struct PR1_MESSAGE* pr1_message);
+void pr1_message_fill_header_info(struct PR1_MESSAGE* pr1_message, unsigned short debug_seq_num);
 int pr1_message_get_data_size(struct PR1_MESSAGE* pr1_message);
 
 void dump_pr1_message(const char* prefix, struct PR1_MESSAGE* pr1_message);

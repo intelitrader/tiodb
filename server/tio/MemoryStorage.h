@@ -117,7 +117,24 @@ namespace MemoryStorage
 		typedef map<string, pair<shared_ptr<ITioStorage>, shared_ptr<ITioPropertyMap> > (*) (const string&, const string&)> SupportedTypesMap;
 		SupportedTypesMap supportedTypes_;
 
+		EventSink sink_;
+
 	public:
+
+		virtual void SetSubscriber(EventSink sink)
+		{
+			sink_ = sink;
+
+			for (auto& v : containers_)
+				v.second.storage->SetSubscriber(sink_);
+		}
+
+		virtual void RemoveSubscriber()
+		{
+			sink_ = nullptr;
+			for (auto& v : containers_)
+				v.second.storage->SetSubscriber(nullptr);
+		}
 
 		MemoryStorageManager()
 		{
@@ -193,6 +210,8 @@ namespace MemoryStorage
 				ret.first = info.storage;
 				ret.second = info.propertyMap;
 			}
+
+			ret.first->SetSubscriber(sink_);
 			
 			return ret;
 		}
@@ -212,6 +231,8 @@ namespace MemoryStorage
 
 			ret.first = i->second.storage;
 			ret.second = i->second.propertyMap;
+
+			ret.first->SetSubscriber(sink_);
 
 			return ret;
 		}

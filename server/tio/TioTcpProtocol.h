@@ -31,6 +31,11 @@ namespace tio
 		error
 	};
 
+	inline const char* GenerateSimpleOkAnswer()
+	{
+		return "answer ok\r\n";
+	}
+
 	inline void MakeAnswerStart(AnswerType type, ostream& stream, const char* answer = NULL)
 	{
 		stream << "answer " << (type == success ? "ok" : "error") << " ";
@@ -279,7 +284,7 @@ namespace tio
 			type(TypeUndefined)
 		{}
 
-		void Clear()
+		void Reset()
 		{
 			pendingDataSize = 0;
 			type = TypeUndefined;
@@ -310,7 +315,7 @@ namespace tio
 		if(*(line.end() - 1) == '\r')
 			line.erase(line.end() - 1);
 
-		answer->Clear();
+		answer->Reset();
 
 		answer->rawAnswerLine = line;
 

@@ -16,6 +16,9 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 */
 #pragma once
 
+#include "../../client/c/tioclient.h"
+#include "tiomutex.h"
+
 //
 // TODO: find a better place to this
 //
@@ -31,6 +34,7 @@ namespace tio
 	using std::pair;
 	using std::function;
 	using std::shared_ptr;
+	using std::to_string;
 
 	template<typename T1, typename T2>
 	class __PairAssignDetail__
@@ -223,6 +227,11 @@ namespace tio
 		{
 			type_ = None;
 			Set(str);
+		}
+
+		TioData(std::nullptr_t n)
+		{
+			type_ = None;
 		}
 
 		~TioData()
@@ -503,6 +512,19 @@ namespace tio
 			return string_;
 		}
 
+		string AsString() const
+		{
+			switch (type_)
+			{
+			case TioData::Int: return to_string(int_);
+			case TioData::Double: return to_string(double_);
+			case TioData::String: return string_;
+			case TioData::None: return string();
+			default:
+				throw std::runtime_error("invalid data type");
+			}
+		}
+
 		const void* AsRaw() const 
 		{
 			switch(type_)
@@ -510,9 +532,8 @@ namespace tio
 				case Int : return const_cast<const int*>(&int_);
 				case Double : return &double_;
 				case String : return string_;
+				default: throw std::runtime_error("wrong data type");
 			}
-
-			throw std::runtime_error("wrong data type");
 		}
 
 		size_t GetSize() const
@@ -522,9 +543,10 @@ namespace tio
 				case Int : return sizeof(int);
 				case Double : return sizeof(double);
 				case String : return stringSize_;
+				default: throw std::runtime_error("wrong data type");
 			}
 			
-			throw std::runtime_error("wrong data type");
+			
 		}
 
 
@@ -555,13 +577,6 @@ namespace tio
 		return stream;
 	}
 
-	template<typename T>
-	T tio_cast(const TioData& data)
-	{
-
-	}
-
-
 
 	inline std::ostream& operator << (std::ostream& stream, const TioData* td)
 	{
@@ -580,9 +595,10 @@ namespace tio
 		case TioData::Int: return "int";
 		case TioData::Double: return "double";
 		case TioData::String: return "string";
+		default: return "INTERNAL_ERROR";
 		}
 
-		return "INTERNAL_ERROR";
+		
 	}
 
 	//
@@ -647,11 +663,23 @@ namespace tio
 			*start = *end;
 	}
 
-	typedef std::function<void(const string&, const TioData&, const TioData&, const TioData&)> EventSink;
+	enum ContainerEventCode
+	{
+		EVENT_CODE_SET = TIO_COMMAND_SET,
+		EVENT_CODE_INSERT = TIO_COMMAND_INSERT,
+		EVENT_CODE_DELETE = TIO_COMMAND_DELETE,
+		EVENT_CODE_CLEAR = TIO_COMMAND_CLEAR,
+		EVENT_CODE_PUSH_BACK = TIO_COMMAND_PUSH_BACK,
+		EVENT_CODE_PUSH_FRONT = TIO_COMMAND_PUSH_FRONT,
+		EVENT_CODE_SNAPSHOT_END = TIO_EVENT_SNAPSHOT_END
+	};
+
+	// storage_id, event_id, key, value, metadata
+	typedef std::function<void(uint64_t, ContainerEventCode, const TioData&, const TioData&, const TioData&)> EventSink;
 
 	static const TioData TIONULL = TioData();
 
-	INTERFACE ITioResultSet
+	struct ITioResultSet
 	{
 		virtual bool GetRecord(TioData* key, TioData* value, TioData* metadata) = 0;
 
@@ -667,7 +695,7 @@ namespace tio
 	};
 
 
-	INTERFACE ITioStorage
+	struct ITioStorage
 	{
 		virtual size_t GetRecordCount() = 0;
 		
@@ -683,20 +711,27 @@ namespace tio
 		virtual void Insert(const TioData& key, const TioData& value, const TioData& metadata) = 0;
 		virtual void Delete(const TioData& key, const TioData& value, const TioData& metadata) = 0;
 
-		virtual shared_ptr<ITioResultSet> Query(int startOffset, int endOffset, const TioData& query) = 0;
-
 		virtual void Clear() = 0;
+
+		virtual shared_ptr<ITioResultSet> Query(int startOffset, int endOffset, const TioData& query) = 0;
+		virtual uint64_t GetRevNum() = 0;
 
 		virtual string GetType() = 0;
 		virtual string GetName() = 0;
 
 		virtual string Command(const string& command) = 0;
 
-		virtual unsigned int Subscribe(EventSink sink, const string& start) = 0;
-		virtual void Unsubscribe(unsigned int cookie) = 0;
+		virtual void SetSubscriber(EventSink sink) = 0;
+		virtual void RemoveSubscriber() = 0;
+
+		
+
+		//virtual tio_spin_lock GetLock() = 0;
+
+		virtual uint64_t GetId() = 0;
 	};
 
-	INTERFACE ITioPropertyMap
+	struct ITioPropertyMap
 	{
 		virtual string Get(const string& key) = 0;
 		virtual void Set(const string& key, const string& value) = 0;
@@ -708,8 +743,10 @@ namespace tio
 		string type;
 	};
 
-	INTERFACE ITioStorageManager
+	struct ITioStorageManager
 	{
+		virtual void SetSubscriber(EventSink sink) = 0;
+	
 		virtual bool Exists(const string& containerType, const string& containerName) = 0;
 
 		virtual pair<shared_ptr<ITioStorage>, shared_ptr<ITioPropertyMap> > 
@@ -725,7 +762,7 @@ namespace tio
 		virtual std::vector<StorageInfo> GetStorageList() = 0;
 	};
 
-	INTERFACE ITioContainer
+	struct ITioContainer
 	{
 		virtual string GetName() = 0;
 		virtual size_t GetRecordCount() = 0;
@@ -744,58 +781,22 @@ namespace tio
 		virtual void Set(const TioData& key, const TioData& value, const TioData& metadata = TIONULL) = 0;
 		virtual void Delete(const TioData& key, const TioData& value = TIONULL, const TioData& metadata = TIONULL) = 0;
 
-		virtual shared_ptr<ITioResultSet> Query(int startOffset, int endOffset, const TioData& query) = 0;
-
 		virtual void Clear() = 0;
+
+		virtual shared_ptr<ITioResultSet> Query(int startOffset, int endOffset, const TioData& query) = 0;
+		virtual uint64_t GetRevNum() = 0;
 
 		virtual void SetProperty(const string& key, const string& value) = 0;
  		virtual string GetProperty(const string& key) = 0;
-
-		virtual unsigned int Subscribe(EventSink sink, const string& start) = 0;
-		virtual void Unsubscribe(unsigned int cookie) = 0;
-
+			
 		virtual string GetType() = 0;
 
-		virtual int WaitAndPopNext(EventSink sink) = 0;
-		virtual void CancelWaitAndPopNext(int id) = 0;
+		virtual uint64_t GetStorageId() = 0;
+
+		
+
+		//virtual tio_spin_lock GetLock() = 0;
 	};
-
-	//
-	// multiplexes events to several sinks
-	//
-	class EventDispatcher
-	{
-		typedef map<unsigned int, EventSink> SinkMap;
-		SinkMap sinks_;
-		unsigned int lastCookie_;
-	public:
-
-		EventDispatcher()
-			: lastCookie_(0)
-		{
-
-		}
-		unsigned int Subscribe(EventSink sink)
-		{
-			sinks_[++lastCookie_] = sink;
-			return lastCookie_;
-		}
-
-		void Unsubscribe(unsigned int cookie)
-		{
-			sinks_.erase(cookie);
-		}
-
-		void RaiseEvent(const string& eventName, const TioData& key, const TioData& value, const TioData& metadata)
-		{
-			for(SinkMap::iterator i = sinks_.begin() ; i != sinks_.end() ; ++i)
-			{
-				EventSink& sink = i->second;
-				sink(eventName, key, value, metadata);
-			}
-		}
-	};
-
 
 	class Container : 
 		public ITioContainer,
@@ -803,40 +804,20 @@ namespace tio
 	{
 		shared_ptr<ITioPropertyMap> propertyMap_;
 		shared_ptr<ITioStorage> storage_;
-		tio::recursive_mutex mutex_;
-
-		unsigned int lastPopperId_;
-
-		struct PopperInfo
-		{
-			PopperInfo(){}
-			PopperInfo(EventSink sink, unsigned int id) : sink(sink), id(id) {}
-
-			EventSink sink;
-			unsigned int id;
-		};
-
-		struct FindPopperInfoById
-		{
-			FindPopperInfoById(unsigned int id): id(id) {}
-			
-			bool operator()(const PopperInfo& info) const
-			{
-				return this->id == info.id;
-			}
-
-			unsigned int id;
-		};
-
-		std::list<PopperInfo> poppers_;
 
 		inline size_t GetRealRecordNumber(int recNumber)
 		{
 			if(recNumber >= 0)
+			{
 				if(recNumber > static_cast<int>(GetRecordCount()) - 1)
+				{
 					throw std::out_of_range("invalid record number");
+				}
 				else
+				{
 					return recNumber;
+				}
+			}
 
 			int realRecNumber = static_cast<int>(GetRecordCount()) + recNumber;
 
@@ -851,189 +832,102 @@ namespace tio
 
 		Container(shared_ptr<ITioStorage> storage, shared_ptr<ITioPropertyMap> propertyMap) :
 			storage_(storage),
-			propertyMap_(propertyMap),
-			lastPopperId_(0)
+			propertyMap_(propertyMap)
 		{}
 		
 		~Container()
 		{
 			return;
 		}
+
+		virtual uint64_t GetStorageId()
+		{
+			return storage_->GetId();
+		}
+
+		virtual uint64_t GetRevNum()
+		{
+			return storage_->GetRevNum();
+		}
 		
 		virtual string GetName()
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			return storage_->GetName();
 		}
 
 		virtual string GetType()
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			return storage_->GetType();
 		}
 
 		virtual size_t GetRecordCount()
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			return storage_->GetRecordCount();
 		}
 
 		virtual void GetRecord(const TioData& searchKey, TioData* key,  TioData* value, TioData* metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->GetRecord(searchKey, key, value, metadata);
 		}
 
 		virtual void PopBack(TioData* key, TioData* value, TioData* metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->PopBack(key, value, metadata);
 		}
 
 		virtual void PopFront(TioData* key, TioData* value, TioData* metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->PopFront(key, value, metadata);
 		}
-
-		void HandleWaitAndPopNext()
-		{
-			//
-			// We are assuming the lock is already held
-			// since it's (supposed to be) a private function
-			//
-
-			if(poppers_.empty())
-				return;
-
-			//
-			// In some previous implementation, I was getting the first
-			// record, calling the callback and then pop_back'ing the record.
-			// It doesn't work because it causes a problem if the callback
-			// calls wait'n'pop again (we must be reentrant)
-			//
-			// That's how it works: THERE'S NO GUARANTEE THAT THE RECORD
-			// FETCHED WITH WAIT_AND_POP WILL NOT GET LOST. That's how it works.
-			// If there is a need for such guarantee, the one who is pushing records
-			// to the list must be able to check for a timeout or something and
-			// push the record to the list again in case the record got lost
-			//
-			TioData key, value, metadata;
-
-			storage_->PopFront(&key, &value, &metadata);
-
-			PopperInfo info = poppers_.front();
-			poppers_.pop_front();
-			
-			info.sink("wnp_next", key, value, metadata);
-		}
-
 				
 		virtual void PushBack(const TioData& key, const TioData& value, const TioData& metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->PushBack(key, value, metadata);
-			HandleWaitAndPopNext();
 		}
 
 		virtual void PushFront(const TioData& key, const TioData& value, const TioData& metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->PushFront(key, value, metadata);
-			HandleWaitAndPopNext();
 		}
-
 		
 		virtual void Insert(const TioData& key, const TioData& value, const TioData& metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->Insert(key, value, metadata);
 		}
 
 		virtual void Set(const TioData& key, const TioData& value, const TioData& metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->Set(key, value, metadata);
 		}
 
 		virtual void Delete(const TioData& key, const TioData& value, const TioData& metadata)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->Delete(key, value, metadata);
 		}
 
 		virtual shared_ptr<ITioResultSet> Query(int startOffset, int endOffset, const TioData& query)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			return storage_->Query(startOffset, endOffset, query);
 		}
 
 		virtual void Clear()
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			storage_->Clear();
 		}
 
 		virtual string Command(const string& command)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			return storage_->Command(command);
 		}
 
 		virtual void SetProperty(const string& key, const string& value)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			propertyMap_->Set(key, value);
 		}
 
 		virtual string GetProperty(const string& key)
 		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
 			return propertyMap_->Get(key);
-		}
-
-		virtual unsigned int Subscribe(EventSink sink, const string& start)
-		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
-			return storage_->Subscribe(sink, start);
-		}
-		virtual void Unsubscribe(unsigned int cookie)
-		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
-			storage_->Unsubscribe(cookie);
-		}
-
-		virtual int WaitAndPopNext(EventSink sink)
-		{
-			tio::recursive_mutex::scoped_lock lock(mutex_);
-
-			if(storage_->GetRecordCount() > 0)
-			{
-				TioData key, value, metadata;
-
-				//
-				// Disclaimer: THERE'S NO GUARANTEE THAT THE RECORD
-				// FETCHED WITH WAIT_AND_POP WILL NOT GET LOST. That's how it works.
-				// If there is a need for such guarantee, the one who is pushing records
-				// to the list must be able to check for a timeout or something and
-				// push the record to the list again in case the record got lost
-				//
-				storage_->PopFront(&key, &value, &metadata);
-				
-				sink("wnp_next", key, value, metadata);
-
-				return 0;
-			}
-			else
-			{
-				poppers_.push_back(PopperInfo(sink, ++lastPopperId_));
-				return lastPopperId_;
-			}
-		}
-
-		virtual void CancelWaitAndPopNext(int id)
-		{
-			poppers_.remove_if(FindPopperInfoById(id));
 		}
 	};
 
@@ -1045,9 +939,7 @@ namespace tio
 
 		ValueAndMetadata(const TioData& value, const TioData& metadata) 
 			: value(value), metadata(metadata)
-		{
-			
-		}
+		{}
 
 		TioData value;
 		TioData metadata;
@@ -1250,6 +1142,5 @@ namespace tio
 		string type = container->GetType();
 		return type == "volatile_map" || type == "persistent_map";
 	}
-
 }
 

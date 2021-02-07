@@ -35,6 +35,9 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 #pragma warning(disable : 4127) // conditional expression is constant
 #pragma warning(disable : 4512) // assignment operator could not be generated
 #pragma warning(disable : 4100) // unreferenced local parameter
+#pragma warning(disable : 4456) //  declaration of 'XX' hides previous local declaration
+#pragma warning(disable : 4457) //  declaration of 'XX' hides member
+#pragma warning(disable : 4458) //  declaration of 'XX' hides member
 #pragma warning(disable : 4121) //: 'boost::python::detail::aligned_storage<size>' : alignment of a member was sensitive to packing
 
 
@@ -97,6 +100,11 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
 #include <deque>
 #include <limits>
 
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+
 //
 // macros are evil, you know?
 //
@@ -136,21 +144,3 @@ bool key_found(T& container, V& value)
 #ifndef min
 template<typename T1, typename T2> inline T1 min (T1 l, T2 r) { return l < r ? l : r; }
 #endif
-
-//
-// fake mutex, so we can switch mutithread on and off
-//
-namespace tio
-{
-	class recursive_mutex
-	{
-	public:
-		class scoped_lock
-		{
-		public:
-			scoped_lock(recursive_mutex& m){}
-		};
-	};
-}
-
-

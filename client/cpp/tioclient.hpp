@@ -46,7 +46,7 @@ namespace tio
 	inline void ToTioData(const string& v, TIO_DATA* tiodata)
 	{
 		tiodata_set_as_none(tiodata);
-		tiodata_set_string_and_size(tiodata, v.c_str(), v.size());
+		tiodata_set_string_and_size(tiodata, v.c_str(), (unsigned int) v.size());
 	}
 
 	inline void FromTioData(const TIO_DATA* tiodata, int* value)
@@ -79,7 +79,7 @@ namespace tio
 	inline void ThrowOnTioClientError(int result)
 	{
 		//
-		// TODO: create a typed exception an fill it accordingly
+		// TODO: create a typed exception and fill it accordingly
 		// 
 		if(result < 0)
 		{
@@ -319,7 +319,7 @@ namespace tio
 
 	public:
 
-		class TioScopedNetworkBatch : boost::noncopyable
+		class TioScopedNetworkBatch
 		{
 			Connection& connection_;
 		public:
@@ -380,13 +380,13 @@ namespace tio
 			connection_ = nullptr;
 		}
 
-		int WaitForNextEventAndDispatch(unsigned int timeOutInSeconds)
+		int WaitForNextEventAndDispatch(unsigned int* timeOutInSeconds)
 		{
 			int ret;
 
 			tio_dispatch_pending_events(connection_, 0xFFFFFFFF);
 
-			ret = tio_receive_next_pending_event(connection_, &timeOutInSeconds);
+			ret = tio_receive_next_pending_event(connection_, timeOutInSeconds);
 
 			if(ret == TIO_ERROR_TIMEOUT)
 			{
@@ -486,6 +486,7 @@ namespace tio
 			IContainerManager* containerManager_;
 			EventCallbackT eventCallback_;
 			EventCallbackT waitAndPopNextCallback_;
+			EventCallbackT queryCallback_;
 
 			IContainerManager* container_manager()
 			{
@@ -500,7 +501,8 @@ namespace tio
 				container_(nullptr),
 				containerManager_(nullptr),
 				eventCallback_(nullptr),
-				waitAndPopNextCallback_(nullptr)
+				waitAndPopNextCallback_(nullptr),
+				queryCallback_(nullptr)
 			{
 			}
 
@@ -536,7 +538,7 @@ namespace tio
 
 
 			template<typename TConnection>
-			void create(TConnection* cn, const string& name, const string& type = "")
+			void create(TConnection* cn, const string& name, const string& containerType)
 			{
 				int result;
 
@@ -544,7 +546,7 @@ namespace tio
 
 				containerManager_ = cn->container_manager();
 
-				result = container_manager()->create(name.c_str(), type.c_str(), &container_);
+				result = container_manager()->create(name.c_str(), containerType.c_str(), &container_);
 
 				ThrowOnTioClientError(result);
 
@@ -567,20 +569,22 @@ namespace tio
 				const struct TIO_DATA* key, const struct TIO_DATA* value, const struct TIO_DATA*)
 			{
 				this_type* me = (this_type*)cookie;
-				TKey typedKey;
-				TValue typedValue;
+				TKey typedKey{};
+				TValue typedValue{};
 
 				if(key->data_type != TIO_DATA_TYPE_NONE)
 					FromTioData(key, &typedKey);
 
 				if(value->data_type != TIO_DATA_TYPE_NONE)
 					FromTioData(value, &typedValue);
+
+				const char* eventName = tio_event_code_to_string(event_code);
 				
-				me->eventCallback_(container_name, "event", typedKey, typedValue);
+				me->eventCallback_(container_name, eventName, typedKey, typedValue);
 			}
 
-			// typedef void (*event_callback_t)(void* /*cookie*/, const char* /*group_name*/, const char* /*container_name*/, unsigned int /*handle*/, unsigned int /*event_code*/, const struct TIO_DATA*, const struct TIO_DATA*, const struct TIO_DATA*);
-			static void WaitAndPopNextCallback(void* cookie, const char* /*group_name*/, const char* container_name, unsigned int /*handle*/, unsigned int /*event_code*/, 
+			static void WaitAndPopNextCallback(int result, void* /*handle*/, void* cookie, unsigned int /*event_code*/,
+				const char* /*group_name*/, const char* container_name,
 				const struct TIO_DATA* key, const struct TIO_DATA* value, const struct TIO_DATA*)
 			{
 				this_type* me = (this_type*)cookie;
@@ -599,7 +603,7 @@ namespace tio
 				EventCallbackT cb = me->waitAndPopNextCallback_;
 				me->waitAndPopNextCallback_ = nullptr;
 				
-				cb("wnp_next", container_name, typedKey, typedValue);
+				cb(container_name, "wnp_next", typedKey, typedValue);
 			}
 
 			bool wait_and_pop_next(EventCallbackT callback)
@@ -624,20 +628,29 @@ namespace tio
 
 			void AddToGroup(const string& groupName)
 			{
-				container_manager()->group_add(groupName.c_str(), tio_container_name(container_));
+				container_manager()->group_add(groupName.c_str(), name_.c_str());
 			}
 
-			void subscribe(EventCallbackT callback)
+			void subscribe(EventCallbackT callback, int* start = nullptr)
 			{
 				int result;
 
 				eventCallback_ = callback;
 
+				TIO_DATA tioDataStart;
+
+				tiodata_init(&tioDataStart);
+
+				if (start)
+					tiodata_set_int(&tioDataStart, *start);
+
 				result = container_manager()->container_subscribe(
 					container_,
-					nullptr,
+					start ? &tioDataStart : nullptr,
 					&this_type::EventCallback,
 					this);
+
+				tiodata_free(&tioDataStart);
 			}
 
 			void unsubscribe()
@@ -784,6 +797,32 @@ namespace tio
 			void add_to_group(const string& groupName)
 			{
 				container_manager()->group_add(groupName.c_str(), name_.c_str());
+			}
+
+			static void QueryCallback(int result, void* handle, void* cookie, unsigned int queryid,
+				const char* container_name, const struct TIO_DATA* key, const struct TIO_DATA* value, const struct TIO_DATA*) {
+				this_type* me = (this_type*)cookie;
+				TKey typedKey{};
+				TValue typedValue{};
+
+				if (key->data_type != TIO_DATA_TYPE_NONE)
+					FromTioData(key, &typedKey);
+
+				if (value->data_type != TIO_DATA_TYPE_NONE)
+					FromTioData(value, &typedValue);
+
+				me->queryCallback_(container_name, "query", typedKey, typedValue);
+			}
+
+			void query(EventCallbackT callback)
+			{
+				int result;
+
+				queryCallback_ = callback;
+
+				result = container_manager()->container_query(container_, 0, 0, &this_type::QueryCallback, this);
+
+				ThrowOnTioClientError(result);
 			}
 		};
 	

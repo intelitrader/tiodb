@@ -1,0 +1,11 @@
+{
+    "lldb.displayFormat": "auto",
+    "lldb.showDisassembly": "auto",
+    "lldb.dereferencePointers": true,
+    "files.associations": {
+        "__hash_table": "cpp",
+        "__tree": "cpp",
+        "type_traits": "cpp",
+        "memory": "cpp"
+    }
+}

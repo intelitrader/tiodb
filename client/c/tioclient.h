@@ -1,18 +1,21 @@
 #pragma once
+
 /*
 	This is the C LANGUAGE Tio client.
 	If you're looking for the C++ version, pick the tioclient.hpp header
 */
 
 #ifdef _MSC_VER
-	#define _CRT_SECURE_NO_WARNINGS
-	#define _WINSOCK_DEPRECATED_NO_WARNINGS
-	#include <stdio.h>
-	#include <tchar.h>
-	#include <assert.h>
-	#include <time.h>
-	#include <WinSock.h>
-	#pragma comment(lib ,"ws2_32.lib")
+
+#define _CRT_SECURE_NO_WARNINGS
+#include <WinSock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <stdio.h>
+#include <tchar.h>
+#include <assert.h>
+#include <time.h>
+#pragma comment(lib ,"ws2_32.lib")
 #else
 	#include <unistd.h>
 	#include <stdlib.h>
@@ -40,13 +43,7 @@ extern "C" {
 #define TIO_DATA_TYPE_INT 				0x3
 #define TIO_DATA_TYPE_DOUBLE 			0x4
 
-#define TIO_SUCCESS						   0
-#define TIO_ERROR_GENERIC				  -1
-#define TIO_ERROR_NETWORK				  -2
-#define TIO_ERROR_PROTOCOL      		  -3
-#define TIO_ERROR_MISSING_PARAMETER       -4
-#define TIO_ERROR_NO_SUCH_OBJECT	      -5
-#define TIO_ERROR_TIMEOUT			      -6
+#include "tioerr.h"
 
 #define TIO_COMMAND_PING				0x10
 #define TIO_COMMAND_OPEN				0x11
@@ -78,7 +75,9 @@ extern "C" {
 
 #define TIO_FAILED(x) (x < 0)
 
-#define TIO_DEBUG_FLAG_DUMP_MESSAGES_TO_STDOUT 0x01
+
+	typedef void(*DUMP_PROTOCOL_MESSAGES_FUNCTION)(const char*);
+	void tio_set_dump_message_function(DUMP_PROTOCOL_MESSAGES_FUNCTION dump_protocol_messages);
 
 
 //#ifndef SOCKET
@@ -143,6 +142,7 @@ void tio_disconnect(struct TIO_CONNECTION* connection);
 
 void tio_begin_network_batch(struct TIO_CONNECTION* connection);
 void tio_finish_network_batch(struct TIO_CONNECTION* connection);
+    void check_not_on_network_batch(struct TIO_CONNECTION* connection);
 
 int tio_create(struct TIO_CONNECTION* connection, const char* name, const char* type, struct TIO_CONTAINER** container);
 int tio_open(struct TIO_CONNECTION* connection, const char* name, const char* type, struct TIO_CONTAINER** container);
@@ -172,7 +172,7 @@ int tio_container_get_count(struct TIO_CONTAINER* container, int* count);
 int tio_container_query(struct TIO_CONTAINER* container, int start, int end, const char* regex, query_callback_t query_callback, void* cookie);
 int tio_container_subscribe(struct TIO_CONTAINER* container, struct TIO_DATA* start, event_callback_t event_callback, void* cookie);
 int tio_container_unsubscribe(struct TIO_CONTAINER* container);
-int tio_container_wait_and_pop_next(struct TIO_CONTAINER* container, event_callback_t event_callback, void* cookie);
+    int tio_container_wait_and_pop_next(struct TIO_CONTAINER* container, event_callback_t event_callback, void* cookie);
 
 int tio_group_add(struct TIO_CONNECTION* connection, const char* group_name, const char* container_name);
 int tio_group_subscribe(struct TIO_CONNECTION* connection, const char* group_name, const char* start);
@@ -180,18 +180,10 @@ int tio_group_set_subscription_callback(struct TIO_CONNECTION* connection,  even
 
 const char* tio_get_last_error_description();
 
+const char* tio_event_code_to_string(int event_code);const char* tio_event_code_to_string(int event_code);
 
-//
-// for plugins
-//
-struct KEY_AND_VALUE
-{
-	const char* key;
-	const char* value;
-};
 
-typedef void (*tio_plugin_start_t)(void* container_manager, struct KEY_AND_VALUE* parameters);
-typedef void (*tio_plugin_stop_t)();
+#include "tioplugin.h"
 
 #ifdef __cplusplus
 } // extern "C" 

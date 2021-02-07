@@ -40,7 +40,9 @@ namespace logdb
 		}
 
 	public:
-		File(DWORD flags = FILE_FLAG_NO_BUFFERING) 
+		// beware of https://docs.microsoft.com/pt-pt/windows/win32/fileio/file-buffering
+		// File(DWORD flags = FILE_FLAG_NO_BUFFERING) 
+		File(DWORD flags = 0) 
 			: h(INVALID_HANDLE_VALUE), _flags(flags)
 		{}
 
@@ -142,14 +144,7 @@ namespace logdb
 
 		DWORD Write(const void* buffer, DWORD size)
 		{
-			DWORD ret = write(_file, buffer, size);
-		#ifdef __APPLE__
-			// MACOSX doesn't support fdatasync
-			fsync(_file);
-		#else
-			fdatasync(_file);
-		#endif
-			return ret;
+			return write(_file, buffer, size);
 		}
 
 		void SetPointer(DWORD offset)
@@ -173,8 +168,7 @@ namespace logdb
 		
 		bool IsValid()
 		{
-			return false;
-			
+			return _file != -1;
 		}
 	};
 #endif // _WIN32
@@ -445,7 +439,7 @@ namespace logdb
 		LDB_LOG_RECORD_FIELD metadata;
 	};
 
-	static const DWORD LDB_MAGIC = '*BDL';
+	static const DWORD LDB_MAGIC = 0x00BABACA;
 	static const DWORD OPERATION_APPEND	= 1;
 	static const DWORD OPERATION_INSERT = 2;
 	static const DWORD OPERATION_SET = 3;
@@ -651,7 +645,7 @@ namespace logdb
 
 		bool LoadBlock(LDB_BLOCK_HEADER_INFO* blockHeaderInfo)
 		{
-			_file.Read(blockHeaderInfo->offset, blockHeaderInfo->blockHeader);
+			return _file.Read(blockHeaderInfo->offset, blockHeaderInfo->blockHeader) != 0;
 		}
 
 		std::vector<std::string> GetTableList()
@@ -710,13 +704,13 @@ namespace logdb
 			return true;
 		}
 
-		std::auto_ptr<LDB_LOG_RECORD> LoadLogRecords(const LDB_BLOCK_HEADER_INFO& blockHeaderInfo)
+		std::shared_ptr<LDB_LOG_RECORD> LoadLogRecords(const LDB_BLOCK_HEADER_INFO& blockHeaderInfo)
 		{
 			if(blockHeaderInfo.blockHeader.usedCount == 0)
-				return std::auto_ptr<LDB_LOG_RECORD>();
+				return std::shared_ptr<LDB_LOG_RECORD>();
 
 			DWORD recordBufferSize = blockHeaderInfo.blockHeader.usedCount * sizeof(LDB_LOG_RECORD);
-			std::auto_ptr<LDB_LOG_RECORD> logRecords(new LDB_LOG_RECORD[blockHeaderInfo.blockHeader.usedCount]);
+			std::shared_ptr<LDB_LOG_RECORD> logRecords(new LDB_LOG_RECORD[blockHeaderInfo.blockHeader.usedCount]);
 
 			memset(logRecords.get(), 0, recordBufferSize);
 
@@ -763,7 +757,7 @@ namespace logdb
 			tableInfo.lastBlockHeaderInfo.blockHeader.size = _defaultBlockSize;
 			tableInfo.lastBlockHeaderInfo.blockHeader.usedCount = 0;
 
-			std::auto_ptr<unsigned char> buffer(new unsigned char[_defaultBlockSize]);
+			std::shared_ptr<unsigned char> buffer(new unsigned char[_defaultBlockSize]);
 			memset(buffer.get(), LOGDB_UNINITIALIZED_BYTE, _defaultBlockSize);
 			*((LDB_BLOCK_HEADER*)buffer.get()) = tableInfo.lastBlockHeaderInfo.blockHeader;
 
@@ -799,7 +793,7 @@ namespace logdb
 			//
 			// read log records to memory
 			//
-			std::auto_ptr<LDB_LOG_RECORD> logRecords = LoadLogRecords(tableInfo->lastBlockHeaderInfo);
+			std::shared_ptr<LDB_LOG_RECORD> logRecords = LoadLogRecords(tableInfo->lastBlockHeaderInfo);
 
 			LDB_LOG_RECORD* logRecord = NULL;
 

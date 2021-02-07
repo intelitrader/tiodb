@@ -15,6 +15,8 @@ Copyright 2010 Rodrigo Strauss (http://www.1bit.com.br)
    limitations under the License.
 */
 #pragma once
+#include "pch.h"
+
 #include <iostream>
 #include <iomanip>
 #include <sstream>
