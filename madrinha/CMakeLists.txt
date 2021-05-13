@@ -22,6 +22,10 @@ target_compile_features(${PROJECT_NAME}_lib PUBLIC cxx_std_14)
 target_link_libraries(${PROJECT_NAME}_lib ${Boost_LIBRARIES} tioclient)
 
 add_executable(${PROJECT_NAME})
-target_sources(${PROJECT_NAME} PRIVATE main.cpp ${PROJECT_NAME}.rc)
+target_sources(${PROJECT_NAME} PRIVATE
+	main.cpp
+	madrinha.cpp
+	madrinha.h
+)
 
 target_link_libraries(${PROJECT_NAME} ${PROJECT_NAME}_lib)

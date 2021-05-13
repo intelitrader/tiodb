@@ -644,7 +644,7 @@ namespace tio
 	{
 		if(size == 0 || (index < 0 && abs(index) > size))
 			return 0;
-		else if(index > size)
+		else if(index >= size)
 			return size;
 		else
 			return NormalizeIndex(index, size);

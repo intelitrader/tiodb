@@ -1,7 +1,7 @@
 #ifndef _MADRINHA_
 #define _MADRINHA_
 
-#include "../client/cpp/tioclient.hpp"
+#include "tioclient.hpp"
 
 #include <boost/program_options.hpp>
 
@@ -112,10 +112,9 @@ class slave_async {
       } else if (eventName == "query") {
 
         bool notMeta = key.find("__meta__") != 0;
-        bool isGroups = key.find("__meta__/groups") == 0;
         bool hasKey = !clusters_container_.get(key, "").empty();
 
-        if ((notMeta || isGroups) && !hasKey) {
+        if (notMeta && !hasKey) {
           clusters_container_[key] = host;
         }
       }
@@ -168,7 +167,30 @@ class madrinha_server {
 public:
   madrinha_server(const config &config) : config_(config){};
 
+  void create_slaves_container() {
+    auto master_conn = std::make_unique<tio::Connection>(config_.master.host,
+                                                         config_.master.port);
+    tio::containers::list<std::string> slaves_container;
+
+    slaves_container.create(master_conn.get(), "__meta__/cluster_slaves",
+                            "volatile_list");
+    slaves_container.clear();
+
+    for (int i = 0; i < config_.slaves.size(); i++) {
+      try {
+        std::string host(config_.slaves[i].host + ":" +
+                         std::to_string(config_.slaves[i].port));
+        slaves_container.push_back(host);
+      } catch (std::exception &e) {
+        std::cout << e.what() << std::endl;
+        return;
+      }
+    }
+  }
+
   void run() {
+    create_slaves_container();
+
     for (int i = 0; i < config_.slaves.size(); i++) {
       try {
         auto slave =

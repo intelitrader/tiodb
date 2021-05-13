@@ -1,7 +1,4 @@
 #include "madrinha.h"
-#include "tioclient.hpp"
-#include <iostream>
-#include <functional>
 
 
 int main(int argc, const char *argv[]) {

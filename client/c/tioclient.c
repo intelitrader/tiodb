@@ -1176,9 +1176,9 @@ void check_correct_thread(struct TIO_CONNECTION* connection)
 	// TODO3: em Linux (WSL) o mesmo problema foi detectado, apenas
 	// agora que foi executado com o client go e p9mdi_client debug.
 	//
-#if !defined(__APPLE__) && !defined(_WIN32)
-	assert(pthread_equal(connection->thread_id, current_thread_id));
-#endif
+//#if !defined(__APPLE__) && !defined(_WIN32)
+//	assert(pthread_equal(connection->thread_id, current_thread_id));
+//#endif
 }
 
 
@@ -1336,6 +1336,8 @@ int tio_connect(const char* host, short port, struct TIO_CONNECTION** connection
 	(*connection)->max_pending_event_count = 0;
 	(*connection)->pending_answer_count = 0;
 	(*connection)->debug_flags = 0;
+	(*connection)->clusters_connections_buffer_size = 0;
+	(*connection)->clusters_connections_count = 0;
 	result = tio_open(*connection, "__meta__/clusters", "volatile_map", &(*connection)->clusters_container);
 	return TIO_SUCCESS;
 
@@ -1970,7 +1972,7 @@ int tio_connect_cluster(struct TIO_CONNECTION* connection, const char* host, sho
 }
 
 
-int tio_create_or_open_cluster(struct TIO_CONNECTION* connection, unsigned int command_id, const char* name, const char* type, struct TIO_CONTAINER** container, struct TIO_CONTAINER* clusters)
+int tio_create_or_open_cluster(struct TIO_CONNECTION* connection, unsigned int command_id, const char* name, const char* type, struct TIO_CONTAINER** container)
 {
 	int tio_create_or_open(struct TIO_CONNECTION* connection, unsigned int command_id, const char* name, const char* type, struct TIO_CONTAINER** container);
 
@@ -2052,7 +2054,7 @@ int tio_create_or_open(struct TIO_CONNECTION* connection, unsigned int command_i
 	{
 		if (connection->clusters_container)
 		{
-			result = tio_create_or_open_cluster(connection, command_id, name, type, container, connection->clusters_container);
+			result = tio_create_or_open_cluster(connection, command_id, name, type, container);
 		}
 		goto clean_up_and_return;
 	}
@@ -2553,12 +2555,71 @@ int tio_group_set_subscription_callback(struct TIO_CONNECTION* connection,  even
 	return 0;
 }
 
+void tio_slaves_container_callback(int result, unsigned int handle, void* cookie, unsigned int event_code,
+	const char* container_name, const struct TIO_DATA* key, const struct TIO_DATA* value, const struct TIO_DATA* metadata)
+{
+	struct TIO_CONNECTION* connection = (struct TIO_CONNECTION*)cookie;
+	struct TIO_CONNECTION* cluster_connection;
+	char* host = connection->host;
+	char* port_string;
+	int port;
+
+	if (value)
+	{
+		if (port_string = strchr(value->string_, ':'))
+		{
+			*port_string++ = 0;
+			host = value->string_;
+			port = atoi(port_string);
+		}
+		else
+		{
+			port = atoi(value->string_);
+		}
+
+		tio_connect_cluster(connection, host, port, &cluster_connection);
+	}
+}
+
 
 int tio_group_subscribe(struct TIO_CONNECTION* connection, const char* group_name, const char* start)
 {
 	int result;
 	struct PR1_MESSAGE* request = NULL;
 	struct PR1_MESSAGE* response = NULL;
+
+	// Check if is in cluster
+	if (connection->clusters_container)
+	{
+		// Get all cluster connections from slaves_container
+		if (!connection->slaves_container)
+		{
+			result = tio_open(connection, "__meta__/cluster_slaves", "volatile_list", &(connection)->slaves_container);
+
+			if (result == TIO_SUCCESS)
+			{
+				// The callback will use the tio_connect_cluster to connect (only if needed) on this clusters
+				result = tio_container_query(connection->slaves_container,
+					0,
+					255,
+					NULL,
+					tio_slaves_container_callback,
+					connection);
+			}
+		}
+		// Already connected on all clusters
+		// Let's subscribe on group of all clusters
+		// @warning Do not put this as else, because the tio_open and tio_slaves_container_callback will update this pointers
+		if (connection->slaves_container)
+		{
+			for (int i = 0; i < connection->clusters_connections_count; ++i)
+			{
+				connection->clusters_connections[i]->group_event_callback = connection->group_event_callback;
+				connection->clusters_connections[i]->group_event_cookie = connection->group_event_cookie;
+				tio_group_subscribe(connection->clusters_connections[i], group_name, start);
+			}
+		}
+	}
 
 	check_correct_thread(connection);
 

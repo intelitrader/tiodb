@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.13)
-project (tiodb VERSION 1.4.1)
+project (tiodb VERSION 1.6.0)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/tiodb_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/tiodb_config.h)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
@@ -15,6 +15,7 @@ add_subdirectory(client/c)
 add_subdirectory(tests/tiobench)
 add_subdirectory(server/tio)
 add_subdirectory(madrinha)
+add_subdirectory(tools/TioLogReplayCpp)
 
 # testes do gtest quebrando: corrigir antes de descomentar
 #option(PACKAGE_TESTS "Build the tests" ON)

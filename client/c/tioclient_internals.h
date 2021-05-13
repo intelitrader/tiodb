@@ -133,6 +133,7 @@ struct TIO_CONNECTION
 	int debug_flags;
 
 	struct TIO_CONTAINER* clusters_container;
+	struct TIO_CONTAINER* slaves_container;
 	struct TIO_CONNECTION** clusters_connections;
 	int clusters_connections_buffer_size;
 	int clusters_connections_count;

@@ -307,6 +307,7 @@ namespace tio {
 					{
 						begin = end = data_.end();
 						startOffset = 0;
+						endOffset = 0;
 					}
 					else
 					{
